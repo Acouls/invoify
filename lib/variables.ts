@@ -185,32 +185,58 @@ export const SHORT_DATE_OPTIONS: Intl.DateTimeFormatOptions = {
 /**
  * Form defaults
  */
+/**
+ * YHH — Your Honest Handyman job app.
+ *
+ * Webhook that receives finished jobs (Apps Script, see apps-script-webhook.gs
+ * at the project root). Set NEXT_PUBLIC_YHH_WEBHOOK_URL in .env.local once
+ * the script is deployed. While it is empty the app runs in LOCAL TEST mode:
+ * the invoice number is a clearly-marked DEMO number and nothing is sent.
+ */
+export const YHH_WEBHOOK_URL =
+    process.env.NEXT_PUBLIC_YHH_WEBHOOK_URL || "";
+
+/** First invoice number after the 1773 already issued; the sheet owns the sequence. */
+export const YHH_DEMO_BASE_NUMBER = 1774;
+
+/** Contact for new-job notifications. Andrew's Gmail unless he says otherwise. */
+export const YHH_NOTIFY_EMAIL = "couls8411@gmail.com";
+
 export const FORM_DEFAULT_VALUES = {
   sender: {
-    name: "",
+    // Name and email are on record (yourhonesthandyman@gmail.com). The street
+    // address / city / phone are NOT on file anywhere — Andrew fills them in
+    // once in the form's "Company details" section; the draft autosave keeps
+    // them on the phone afterwards. Nothing here is invented.
+    name: "Your Honest Handyman Inc",
     address: "",
     zipCode: "",
     city: "",
     country: "",
-    email: "",
+    email: "yourhonesthandyman@gmail.com",
     phone: "",
     customInputs: [],
   },
   receiver: {
-    name: "",
-    address: "",
-    zipCode: "",
-    city: "",
-    country: "",
-    email: "",
-    phone: "",
+    // Build-A-Bear Workshop HQ, from the YHH email report (Blake Lauria,
+    // Facilities Coordinator). AP email per Andrew's own contact list.
+    name: "Build-A-Bear Workshop",
+    address: "415 S. 18th St, Suite 200",
+    zipCode: "63103",
+    city: "St. Louis",
+    country: "USA",
+    email: "AcctsPay@buildabear.com",
+    phone: "314-423-8000 x5467",
     customInputs: [],
   },
   details: {
     invoiceLogo: "",
     invoiceNumber: "",
-    invoiceDate: "",
-    dueDate: "",
+    // Dates are Date objects at runtime (as the original date pickers set
+    // them); the zod schema transforms them to display strings on submit,
+    // so the inferred type says string. Cast, as readDraft does elsewhere.
+    invoiceDate: new Date() as unknown as string,
+    dueDate: new Date() as unknown as string,
     items: [
       {
         name: "",
@@ -235,22 +261,34 @@ export const FORM_DEFAULT_VALUES = {
       cost: 0,
       costType: "amount",
     },
-    paymentInformation: {
-      bankName: "",
-      accountName: "",
-      accountNumber: "",
-    },
+    // No paymentInformation here on purpose: the schema requires all three
+    // bank fields when the object is present, and YHH jobs have no payment
+    // info. Upstream shipped empty strings for these, which can never
+    // validate — leaving the object out entirely is the valid state.
     additionalNotes: "",
-    paymentTerms: "",
+    paymentTerms: "Net 30",
     totalAmountInWords: "",
-    pdfTemplate: 1,
+    pdfTemplate: 14,
     // `as const` so fontId/density keep their literal types and satisfy the
     // enums in ThemeSchema rather than widening to string.
     theme: {
-      accentColor: "#4F46E5",
-      fontId: "outfit",
+      accentColor: "#1F2937",
+      fontId: "plexSans",
       density: "comfortable",
     } as const,
+  },
+  job: {
+    storeNumber: "",
+    streetAddress: "",
+    mallLocation: "",
+    cityStateZip: "",
+    poNumber: "",
+    completionDate: new Date() as unknown as string,
+    workPerformed: "",
+    tripCharge: 0,
+    materials: 0,
+    labor: 0,
+    photos: [],
   },
 };
 

@@ -162,9 +162,52 @@ const SignatureSchema = z.object({
 });
 
 /**
- * Presentation options. Every field optional with a default so existing saved
- * invoices keep validating.
+ * YHH job details — the fields John fills in on a finished Build-A-Bear job.
+ * These mirror the "YHH Job Completion" Tally form (Store Number, Street
+ * Address, Mall/Location, City/State/ZIP, PO Number, Completion Date, Work
+ * Performed, Trip Charge, Materials, Labor, Total, Photos).
+ *
+ * Photos are base64 data URLs, capped at 10 MB total across all photos — the
+ * same cap as the Tally form. The PDF itself only lists photo names/count;
+ * the full images travel to Andrew through the webhook, not in the PDF.
  */
+const JobPhotoSchema = z.object({
+    name: fieldValidators.stringMin1,
+    size: fieldValidators.nonNegativeNumber,
+    dataUrl: imageDataUrl,
+});
+
+const JobDetailsSchema = z.object({
+    storeNumber: z
+        .string()
+        .min(1, { message: "Store number is required" })
+        .max(20, { message: "Must be at most 20 characters" }),
+    streetAddress: fieldValidators.address,
+    mallLocation: z
+        .string()
+        .min(1, { message: "Mall / location is required" })
+        .max(70, { message: "Must be at most 70 characters" }),
+    cityStateZip: z
+        .string()
+        .min(1, { message: "City, State, ZIP is required" })
+        .max(70, { message: "Must be at most 70 characters" }),
+    poNumber: z
+        .string()
+        .min(1, { message: "PO number is required" })
+        .max(50, { message: "Must be at most 50 characters" }),
+    completionDate: fieldValidators.date,
+    workPerformed: z
+        .string()
+        .min(1, { message: "Describe the work performed" })
+        .max(2000, { message: "Must be at most 2000 characters" }),
+    tripCharge: fieldValidators.nonNegativeNumber,
+    materials: fieldValidators.nonNegativeNumber,
+    labor: fieldValidators.nonNegativeNumber,
+    photos: z.array(JobPhotoSchema).max(10).optional().default([]),
+});
+
+/** 10 MB total across all photos, matching the Tally form's limit. */
+export const YHH_MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 const ThemeSchema = z.object({
     // Restricted to a hex literal: the value is interpolated into inline
     // styles in the templates, including in the PDF.
@@ -183,7 +226,10 @@ const ThemeSchema = z.object({
 const InvoiceDetailsSchema = z.object({
     theme: ThemeSchema.optional(),
     invoiceLogo: imageDataUrl.optional(),
-    invoiceNumber: fieldValidators.stringMin1,
+    // Empty until submit: the invoice number is reserved from Andrew's sheet
+    // at submit time (see lib/yhh.ts), never typed in or guessed on the phone.
+    // The PDF is only ever generated after the number has been set.
+    invoiceNumber: z.string().max(50),
     invoiceDate: fieldValidators.date,
     dueDate: fieldValidators.date,
     purchaseOrderNumber: fieldValidators.stringOptional,
@@ -208,6 +254,9 @@ const InvoiceSchema = z.object({
     sender: InvoiceSenderSchema,
     receiver: InvoiceReceiverSchema,
     details: InvoiceDetailsSchema,
+    // YHH job fields. Optional so invoices saved before the job form existed
+    // still validate; the job form always writes it.
+    job: JobDetailsSchema.optional(),
 });
 
-export { InvoiceSchema, ItemSchema };
+export { InvoiceSchema, ItemSchema, JobDetailsSchema };

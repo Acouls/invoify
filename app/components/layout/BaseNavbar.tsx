@@ -4,10 +4,6 @@ import { useMemo, useState } from "react";
 
 // Next
 import Link from "next/link";
-import Image from "next/image";
-
-// Assets
-import Logo from "@/public/assets/img/invoify-logo.svg";
 
 // ShadCn
 import {
@@ -44,16 +40,13 @@ const BaseNavbar = () => {
     return (
         <header className="sticky top-0 z-50 border-b border-border bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
             <nav className="container flex h-16 items-center justify-between gap-4">
-                <Link href="/" className="flex shrink-0 items-center">
-                    <Image
-                        src={Logo}
-                        alt="Invoify Logo"
-                        width={887}
-                        height={294}
-                        loading="eager"
-                        priority
-                        className="h-9 w-auto sm:h-10"
-                    />
+                <Link href="/" className="flex shrink-0 items-center gap-2">
+                    <span className="text-lg font-bold tracking-tight">
+                        YHH Job App
+                    </span>
+                    <span className="rounded bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                        Test build
+                    </span>
                 </Link>
 
                 {/* ? DEV Only */}

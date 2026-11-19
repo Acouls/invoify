@@ -98,6 +98,13 @@ export const TEMPLATES: TemplateEntry[] = [
         description: "Metadata column beside the items, spec-sheet style",
         load: () => import("./layouts/Column"),
     },
+    {
+        id: 14,
+        name: "YHH Job Invoice",
+        description:
+            "Your Honest Handyman job invoice — store, PO and charges",
+        load: () => import("./layouts/YHH"),
+    },
 ];
 
 export const DEFAULT_TEMPLATE_ID = 1;

@@ -27,7 +27,13 @@ import { exportInvoice } from "@/services/invoice/client/exportInvoice";
 import { InvoiceSchema } from "@/lib/schemas";
 
 // Helpers
-import { nextInvoiceNumber } from "@/lib/invoiceNumber";
+import {
+    blobToBase64,
+    computeJobTotal,
+    reserveInvoiceNumber,
+    submitJobToWebhook,
+    type YhhSubmissionMode,
+} from "@/lib/yhh";
 
 // Variables
 import {
@@ -38,6 +44,7 @@ import {
   LOCAL_STORAGE_INVOICE_DRAFT_KEY,
   DRAFT_SAVE_DEBOUNCE_MS,
   WARM_BROWSER_API,
+  YHH_WEBHOOK_URL,
 } from "@/lib/variables";
 
 // Storage
@@ -52,6 +59,26 @@ import { ExportTypes, InvoiceType } from "@/types";
  */
 const SAVED_INVOICES_KEY = "savedInvoices";
 
+/**
+ * YHH submit status. Shown in the job form after a submit so John (and
+ * Andrew, testing) can see exactly what happened to the job.
+ */
+export type YhhSubmissionStatus =
+    | "idle"
+    | "working"
+    | "sent"
+    | "local-test"
+    | "error";
+
+export type YhhSubmission = {
+    status: YhhSubmissionStatus;
+    /** "webhook" once a webhook exists; "local-test" while it doesn't. */
+    mode: YhhSubmissionMode;
+    invoiceNumber?: string;
+    total?: number;
+    message?: string;
+};
+
 const defaultInvoiceContext = {
   invoicePdf: new Blob(),
   invoicePdfLoading: false,
@@ -61,6 +88,11 @@ const defaultInvoiceContext = {
   draftSavedAt: null as number | null,
   /** True while edits are sitting in the debounce window, unwritten. */
   draftPending: false,
+  /** YHH submit outcome — idle until the first submit. */
+  submission: {
+    status: "idle",
+    mode: (YHH_WEBHOOK_URL ? "webhook" : "local-test") as YhhSubmissionMode,
+  } as YhhSubmission,
   onFormSubmit: (values: InvoiceType) => {},
   newInvoice: () => {},
   generatePdf: async (data: InvoiceType) => {},
@@ -105,7 +137,13 @@ export const InvoiceContextProvider = ({
   } = useToasts();
 
   // Get form values and methods from form context
-  const { getValues, reset, watch } = useFormContext<InvoiceType>();
+  const { getValues, reset, setValue, watch } = useFormContext<InvoiceType>();
+
+  // YHH submit outcome, shown in the job form.
+  const [submission, setSubmission] = useState<YhhSubmission>({
+    status: "idle",
+    mode: YHH_WEBHOOK_URL ? "webhook" : "local-test",
+  });
 
   // Variables
   const [invoicePdf, setInvoicePdf] = useState<Blob>(new Blob());
@@ -260,35 +298,141 @@ export const InvoiceContextProvider = ({
   }, [invoicePdf]);
 
   /**
-   * Handles form submission.
+   * Handles form submission — the YHH job flow.
+   *
+   * Order matters and is the whole point of this fork:
+   * 1. Reserve the invoice number from Andrew's sheet (or take a clearly
+   *    marked DEMO number in local test mode). The phone never invents a
+   *    real number — duplicate numbers already blocked Build-A-Bear payment
+   *    once.
+   * 2. Build the PDF with that number.
+   * 3. Send the job (fields + PDF + photos) to Andrew through the webhook.
+   *    In local test mode there is nowhere to send it, so the job is saved
+   *    on the phone and marked as a local test instead.
+   * 4. Save the job locally either way, so the demo sequence steps forward
+   *    and nothing is lost if the send fails.
    *
    * @param {InvoiceType} data - The form values used to generate the PDF.
    */
-  const onFormSubmit = (data: InvoiceType) => {
-    // Call generate pdf method
-    generatePdf(data);
+  const onFormSubmit = async (data: InvoiceType) => {
+    setSubmission((prev) => ({ ...prev, status: "working", message: undefined }));
+
+    // 1. Reserve the number first — the PDF is built with it.
+    const reserved = await reserveInvoiceNumber(savedInvoices.length);
+    setValue("details.invoiceNumber", reserved.number, {
+      shouldDirty: true,
+      shouldValidate: false,
+    });
+    const finalData: InvoiceType = {
+      ...data,
+      details: { ...data.details, invoiceNumber: reserved.number },
+    };
+
+    // 2. Build the PDF.
+    const pdf = await generatePdfBlob(finalData);
+    if (!pdf || pdf.size === 0) {
+      setSubmission({
+        status: "error",
+        mode: reserved.mode,
+        invoiceNumber: reserved.number,
+        message: "The invoice PDF could not be built — the job is still on this phone.",
+      });
+      return;
+    }
+
+    const job = finalData.job;
+    const total = job
+      ? computeJobTotal(job)
+      : Number(finalData.details.totalAmount || 0);
+
+    // 4. Keep a local copy regardless of what happens next.
+    await saveInvoice();
+
+    // 3. Send it to Andrew — unless there is nowhere to send it yet.
+    if (reserved.mode === "local-test") {
+      setSubmission({
+        status: "local-test",
+        mode: "local-test",
+        invoiceNumber: reserved.number,
+        total,
+      });
+      return;
+    }
+
+    const pdfBase64 = await blobToBase64(pdf).catch(() => "");
+    if (!pdfBase64) {
+      setSubmission({
+        status: "error",
+        mode: "webhook",
+        invoiceNumber: reserved.number,
+        total,
+        message: "The PDF could not be read for sending — the job is saved on this phone.",
+      });
+      return;
+    }
+
+    const result = await submitJobToWebhook({
+      invoiceNumber: reserved.number,
+      job: job ?? {
+        storeNumber: "",
+        streetAddress: "",
+        mallLocation: "",
+        cityStateZip: "",
+        poNumber: "",
+        completionDate: new Date() as unknown as string,
+        workPerformed: "",
+        tripCharge: 0,
+        materials: 0,
+        labor: 0,
+        photos: [],
+      },
+      total,
+      pdfBase64,
+      submittedAt: new Date().toISOString(),
+    });
+
+    if (result.ok) {
+      setSubmission({
+        status: "sent",
+        mode: "webhook",
+        invoiceNumber: reserved.number,
+        total,
+      });
+    } else {
+      setSubmission({
+        status: "error",
+        mode: "webhook",
+        invoiceNumber: reserved.number,
+        total,
+        message: result.error,
+      });
+    }
   };
 
   /**
-   * Generates a new invoice.
+   * Generates a new job form.
+   *
+   * The invoice number is NOT suggested here: it is reserved from the sheet
+   * at submit time, so a fresh form starts with a blank number and blank job.
    */
   const newInvoice = () => {
-    /*
-     * Suggest the next number rather than leaving the field blank.
-     *
-     * Derived from the most recent saved invoice, preserving whatever scheme
-     * it used — INV0007 -> INV0008, 2026-14 -> 2026-15. It is only a
-     * suggestion: the field stays a normal editable input, because an invoice
-     * number is a legal identifier and people have their own conventions.
-     */
+    // Keep the company details: Andrew fills them in once and they print
+    // on every invoice. Resetting them with the job would make John retype
+    // his own address after every submission.
+    const sender = getValues("sender");
     reset({
       ...FORM_DEFAULT_VALUES,
+      sender,
       details: {
         ...FORM_DEFAULT_VALUES.details,
-        invoiceNumber: nextInvoiceNumber(savedInvoices),
+        invoiceNumber: "",
       },
     });
     setInvoicePdf(new Blob());
+    setSubmission({
+      status: "idle",
+      mode: YHH_WEBHOOK_URL ? "webhook" : "local-test",
+    });
 
     // Clear the draft
     void removeSecure(LOCAL_STORAGE_INVOICE_DRAFT_KEY);
@@ -300,63 +444,81 @@ export const InvoiceContextProvider = ({
   };
 
   /**
+   * Build the PDF and return it as a Blob (or null on failure), without
+   * touching component state. generatePdf below is the stateful wrapper the
+   * rest of the app already calls; onFormSubmit uses this directly so it can
+   * send the bytes to the webhook.
+   */
+  const generatePdfBlob = useCallback(
+    async (data: InvoiceType): Promise<Blob | null> => {
+      // Cancel any in-flight generation so a re-submit doesn't race the previous
+      // one and resolve out of order.
+      generateAbortRef.current?.abort();
+      const controller = new AbortController();
+      generateAbortRef.current = controller;
+
+      try {
+        // Locale travels as a query param so the server can render the PDF in
+        // the same language as the UI.
+        const response = await fetch(`${GENERATE_PDF_API}?locale=${locale}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+          signal: controller.signal,
+        });
+
+        /*
+         * Without this check an error response was read as a PDF blob and, since
+         * the JSON error body has a non-zero size, reported to the user as a
+         * successful generation.
+         */
+        if (!response.ok) {
+          throw new Error(
+            `PDF generation failed with status ${response.status}`,
+          );
+        }
+
+        return await response.blob();
+      } catch (err) {
+        if ((err as Error)?.name === "AbortError") {
+          // Superseded by a newer submit; the newer one owns the loading state.
+          return null;
+        }
+        console.error(err);
+        return null;
+      } finally {
+        if (generateAbortRef.current === controller) {
+          generateAbortRef.current = null;
+        }
+      }
+    },
+    [locale],
+  );
+
+  /**
    * Generate a PDF document based on the provided data.
    *
    * @param {InvoiceType} data - The data used to generate the PDF.
    * @returns {Promise<void>} - A promise that resolves when the PDF is successfully generated.
    * @throws {Error} - If an error occurs during the PDF generation process.
    */
-  const generatePdf = useCallback(async (data: InvoiceType) => {
-    // Cancel any in-flight generation so a re-submit doesn't race the previous
-    // one and resolve out of order.
-    generateAbortRef.current?.abort();
-    const controller = new AbortController();
-    generateAbortRef.current = controller;
-
-    setInvoicePdfLoading(true);
-
-    try {
-      // Locale travels as a query param so the server can render the PDF in
-      // the same language as the UI.
-      const response = await fetch(`${GENERATE_PDF_API}?locale=${locale}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-        signal: controller.signal,
-      });
-
-      /*
-       * Without this check an error response was read as a PDF blob and, since
-       * the JSON error body has a non-zero size, reported to the user as a
-       * successful generation.
-       */
-      if (!response.ok) {
-        throw new Error(
-          `PDF generation failed with status ${response.status}`,
-        );
-      }
-
-      const result = await response.blob();
-      setInvoicePdf(result);
-
-      if (result.size > 0) {
-        // Toast
+  const generatePdf = useCallback(
+    async (data: InvoiceType) => {
+      setInvoicePdfLoading(true);
+      try {
+        const result = await generatePdfBlob(data);
+        if (!result || result.size === 0) {
+          pdfGenerationError();
+          return;
+        }
+        setInvoicePdf(result);
         pdfGenerationSuccess();
-      }
-    } catch (err) {
-      if ((err as Error)?.name === "AbortError") {
-        // Superseded by a newer submit; the newer one owns the loading state.
-        return;
-      }
-      console.error(err);
-      pdfGenerationError();
-    } finally {
-      if (generateAbortRef.current === controller) {
-        generateAbortRef.current = null;
+      } finally {
         setInvoicePdfLoading(false);
       }
-    }
-  }, [locale]);
+    },
+    [generatePdfBlob],
+  );
 
   /**
    * Removes the final PDF file and switches to Live Preview
@@ -587,6 +749,7 @@ export const InvoiceContextProvider = ({
         pdfUrl,
         draftSavedAt,
         draftPending,
+        submission,
         onFormSubmit,
         newInvoice,
         generatePdf,

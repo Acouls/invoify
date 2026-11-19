@@ -18,6 +18,7 @@ import InvoiceActions from "./invoice/InvoiceActions";
 // * Form
 // Form components
 import SingleItem from "./invoice/form/SingleItem";
+import JobForm from "./invoice/form/JobForm";
 import Charges from "./invoice/form/Charges";
 import PartyPicker from "./invoice/form/PartyPicker";
 import PaymentTermPresets from "./invoice/form/PaymentTermPresets";
@@ -115,6 +116,7 @@ export {
     InvoiceMain,
     InvoiceForm,
     InvoiceActions,
+    JobForm,
     BillFromSection,
     BillToSection,
     InvoiceDetails,
