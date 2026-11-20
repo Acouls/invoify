@@ -53,7 +53,7 @@
     "react": "18.2.0",
     "react-day-picker": "^8.8.2",
     "react-dom": "18.2.0",
-    "react-email": "^4.0.16",
+    "react-email": "^6.11.16",
     "react-hook-form": "^7.46.1",
     "react-signature-canvas": "^1.0.6",
     "sharp": "^0.33.0",
